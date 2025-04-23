@@ -97,20 +97,12 @@ SCARA_ROBOT initScaraState(double x, double y, int armSol, SCARA_TOOL penState, 
 *
 * Returns: int - 0 for success
 *
-* Last Modified: April 11, 2025
+* Last Modified: April 22, 2025
 *****************************************************************************************/
 int moveScaraJ(SCARA_ROBOT* scaraState) {
-    // Set the joint angles
-    rotate(scaraState->armPos.theta1, scaraState->armPos.theta2);
-    
-    // Set the pen position
-    setPen(scaraState->toolPos.penPos);
-    
-    // Set the pen color
-    setColor(scaraState->toolPos.penColor.r, scaraState->toolPos.penColor.g, scaraState->toolPos.penColor.b);
-    
-    // Set the motor speed
-    setSpeed(scaraState->motorSpeed);
+    // Use scaraSetState to update the robot state
+    // This will only send commands for values that have changed
+    scaraSetState(*scaraState);
     
     return 0;
 }
@@ -157,6 +149,8 @@ LINE_DATA initLine(double xA, double yA, double xB, double yB, int numPts) {
 *
 * Description:
 *	Moves the SCARA robot along a line using linear interpolation.
+*   First moves to the line start point with pen up (if not already there),
+*   then draws the line with the pen down.
 *
 * Inputs:
 *	scaraState - Pointer to the SCARA robot state
@@ -164,16 +158,47 @@ LINE_DATA initLine(double xA, double yA, double xB, double yB, int numPts) {
 *
 * Returns: int - 0 for success
 *
-* Last Modified: April 11, 2025
+* Last Modified: April 22, 2025
 *****************************************************************************************/
 int moveScaraL(SCARA_ROBOT *scaraState, LINE_DATA line) {
+    // Check if we need to move to the start point first
+    if (fabs(scaraState->armPos.x - line.xA) > POINT_TOL || 
+        fabs(scaraState->armPos.y - line.yA) > POINT_TOL) {
+        
+        // First ensure the pen is up before any movement
+        SCARA_ROBOT penUpState = *scaraState;
+        penUpState.toolPos.penPos = 'u';
+        scaraSetState(penUpState);
+        
+        // Create a temporary state for moving to the start point with pen up
+        SCARA_ROBOT startPointState = *scaraState;
+        startPointState.armPos.x = line.xA;
+        startPointState.armPos.y = line.yA;
+        startPointState.toolPos.penPos = 'u'; // Ensure pen up for moving to start
+        
+        // Calculate inverse kinematics for the start point
+        scaraIK(line.xA, line.yA, &startPointState.armPos.theta1, 
+                &startPointState.armPos.theta2, scaraState->armPos.armSol);
+        
+        // Move to the start point
+        scaraSetState(startPointState);
+        
+        // Update the scaraState with the new position
+        scaraState->armPos.x = line.xA;
+        scaraState->armPos.y = line.yA;
+        scaraState->armPos.theta1 = startPointState.armPos.theta1;
+        scaraState->armPos.theta2 = startPointState.armPos.theta2;
+        scaraState->toolPos.penPos = 'u'; // State reflects pen is up
+    }
+    
+    // Set the pen down for drawing the line
+    SCARA_ROBOT penDownState = *scaraState;
+    penDownState.toolPos.penPos = 'd'; // Put pen down for drawing
+    scaraSetState(penDownState);
+    scaraState->toolPos.penPos = 'd'; // Update state to reflect pen is down
+    
     // Memory allocation for variable sized array of SCARA_ROBOT
     SCARA_ROBOT *robline = (SCARA_ROBOT*) malloc(sizeof(SCARA_ROBOT) * line.numPts);
-    
-    // Set pen color for the line
-    setColor(line.color.r, line.color.g, line.color.b);
-    //setPen(scaraState->toolPos.penPos);
-    setPen('d');
     
     // Calculate points along the line
     for (int i = 0; i < line.numPts; i++) {
@@ -182,25 +207,25 @@ int moveScaraL(SCARA_ROBOT *scaraState, LINE_DATA line) {
         double x = line.xA + t * (line.xB - line.xA);
         double y = line.yA + t * (line.yB - line.yA);
         
-        // Initialize robot state for this point
+        // Copy the current state for this point
         robline[i] = *scaraState;
+        
+        // Update only the position for this point
         robline[i].armPos.x = x;
         robline[i].armPos.y = y;
         
-        // Calculate inverse kinematics
+        // Calculate inverse kinematics for the new position
         scaraIK(x, y, &robline[i].armPos.theta1, &robline[i].armPos.theta2, scaraState->armPos.armSol);
         
-        // Move to this point
-        moveScaraJ(&robline[i]);
+        // Move to this point using scaraSetState
+        scaraSetState(robline[i]);
     }
     
     // Update the scaraState to the end position
     scaraState->armPos.x = line.xB;
     scaraState->armPos.y = line.yB;
     scaraIK(line.xB, line.yB, &scaraState->armPos.theta1, &scaraState->armPos.theta2, scaraState->armPos.armSol);
-
-    setPen('u');
-
+    
     // Free up memory allocated
     free(robline);
     
@@ -303,7 +328,6 @@ int scaraIK(double toolX, double toolY, double* ang1, double* ang2, int arm) {
 *****************************************************************************************/
 void rotate(double ang1, double ang2) {
     char command[MAX_STRING];
-    //sprintf(command, "ROTATE %.2f %.2f", ang1, ang2);
     sprintf(command, "ROTATE_JOINT ANG1 %.2f ANG2 %.2f\n", ang1, ang2);
     robot.Send(command);
 }
@@ -343,7 +367,6 @@ void setColor(int r, int g, int b) {
 * Last Modified: April 11, 2025
 *****************************************************************************************/
 void setPen(char pen) {
-    char command[MAX_STRING];
     if (pen=='u') {
         robot.Send("PEN_UP\n");
     }else if (pen=='d') {
@@ -384,25 +407,63 @@ void setSpeed(char speed) {
 * Function: scaraSetState
 *
 * Description:
-*	Sets the SCARA robot state.
+*	Sets the SCARA robot state. Only sends commands for values that have changed
+*   since the last call.
 *
 * Inputs:
 *	scaraState - SCARA robot state
 *
 * Returns: void
 *
-* Last Modified: April 11, 2025
+* Last Modified: April 22, 2025
 *****************************************************************************************/
 void scaraSetState(SCARA_ROBOT scaraState) {
-    // Set joint angles
-    rotate(scaraState.armPos.theta1, scaraState.armPos.theta2);
+    // Static SCARA_ROBOT to hold previous state
+    static int initialized = 0;
+    static SCARA_ROBOT prevState;
     
-    // Set pen position
-    setPen(scaraState.toolPos.penPos);
-    
-    // Set pen color
-    setColor(scaraState.toolPos.penColor.r, scaraState.toolPos.penColor.g, scaraState.toolPos.penColor.b);
-    
-    // Set motor speed
-    setSpeed(scaraState.motorSpeed);
+    // Initialize prevState with invalid values on first call
+    if (!initialized) {
+        prevState.armPos.theta1 = 1e9;
+        prevState.armPos.theta2 = 1e9;
+        prevState.armPos.x = 1e9;
+        prevState.armPos.y = 1e9;
+        prevState.armPos.armSol = -1;
+        prevState.toolPos.penPos = '\0';
+        prevState.toolPos.penColor.r = -1;
+        prevState.toolPos.penColor.g = -1;
+        prevState.toolPos.penColor.b = -1;
+        prevState.motorSpeed = '\0';
+        initialized = 1;
+    }
+
+    // Update joint angles only if changed
+    if (scaraState.armPos.theta1 != prevState.armPos.theta1 || 
+        scaraState.armPos.theta2 != prevState.armPos.theta2) {
+        rotate(scaraState.armPos.theta1, scaraState.armPos.theta2);
+        prevState.armPos.theta1 = scaraState.armPos.theta1;
+        prevState.armPos.theta2 = scaraState.armPos.theta2;
+    }
+
+    // Update pen position only if changed
+    if (scaraState.toolPos.penPos != prevState.toolPos.penPos) {
+        setPen(scaraState.toolPos.penPos);
+        prevState.toolPos.penPos = scaraState.toolPos.penPos;
+    }
+
+    // Update pen color only if changed
+    if (scaraState.toolPos.penColor.r != prevState.toolPos.penColor.r ||
+        scaraState.toolPos.penColor.g != prevState.toolPos.penColor.g ||
+        scaraState.toolPos.penColor.b != prevState.toolPos.penColor.b) {
+        setColor(scaraState.toolPos.penColor.r, scaraState.toolPos.penColor.g, scaraState.toolPos.penColor.b);
+        prevState.toolPos.penColor.r = scaraState.toolPos.penColor.r;
+        prevState.toolPos.penColor.g = scaraState.toolPos.penColor.g;
+        prevState.toolPos.penColor.b = scaraState.toolPos.penColor.b;
+    }
+
+    // Update motor speed only if changed
+    if (scaraState.motorSpeed != prevState.motorSpeed) {
+        setSpeed(scaraState.motorSpeed);
+        prevState.motorSpeed = scaraState.motorSpeed;
+    }
 }

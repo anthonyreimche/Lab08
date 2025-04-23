@@ -190,7 +190,7 @@ void moveScaraLTB() {
 	lineData = initLine(300, 0, 300, 300, 10);
 	moveScaraL(&robot, lineData);
 
-	/*lineData = initLine(100, 500, 300, 300, 20);
+	lineData = initLine(100, 500, 300, 300, 20);
 	moveScaraL(&robot, lineData);
 
 	lineData = initLine(300, 0, 300, -300, 10);
@@ -248,6 +248,6 @@ void moveScaraLTB() {
 	moveScaraL(&robot, lineData);
 
 	lineData = initLine(0, 600, -300, -500, 20);
-	moveScaraL(&robot, lineData);*/
+	moveScaraL(&robot, lineData);
 }
 
